@@ -1,0 +1,8 @@
+/__pycache__
+/datasets
+/logs
+/training_checkpoints
+/colab
+/saved_models
+/conversion_data
+*.ipynb
