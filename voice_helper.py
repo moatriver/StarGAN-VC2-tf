@@ -2,12 +2,17 @@ import numpy as np
 import pyworld as pw
 import pysptk as sptk
 import soundfile as sf
+import librosa
 
 from setup_args import Args
 ARGS = Args()
 
 def get_conversion_data(file_path):
     x, sr = sf.read(file_path)
+
+    target_sr = ARGS.target_sr
+    x = librosa.resample(x, orig_sr=sr, target_sr=target_sr)
+    sr = target_sr
 
     # frame_period : Period between consecutive frames in milliseconds, default:5.0
     # fft_size : Length of Fast Fourier Transform (in number of samples) The resulting dimension of `ap` adn `sp` will be `fft_size` // 2 + 1, default:1024
@@ -21,6 +26,10 @@ def get_conversion_data(file_path):
 def synthesize_convert_voice(f0, converted_mceps, ap, sr, target_file_path, write_path = None):
 
     x_t, sr_t = sf.read(target_file_path) # sr:24000
+    target_sr = ARGS.target_sr
+    x_t = librosa.resample(x_t, orig_sr=sr_t, target_sr=target_sr)
+    sr_t = target_sr
+
     _f0_t, t_t = pw.dio(x_t, sr_t)    # raw pitch extractor
     f0_t = pw.stonemask(x_t, _f0_t, t_t, sr_t)  # pitch refinement
 

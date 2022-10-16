@@ -12,12 +12,13 @@ class Args:
         self.frame_period = 5.0 # ms
         self.fft_size = 1024
         self.crop_size = 256 # = dataset_t_length
+        self.target_sr = 22050
 
         # self.using_jvs_id_m = ["jvs009", "jvs020", "jvs028", "jvs041"]
         self.using_jvs_id_m = ["jvs009", "jvs020"]
         # self.using_jvs_id_f = ["jvs002", "jvs010", "jvs058", "jvs036"]
         self.using_jvs_id_f = ["jvs002", "jvs010"]
-        self.train_data_ratio = 0.9
+        self.train_data_ratio = 0.85
         self.remake_datasets = False
         self.shuffle_buffer_Size = 100
 
