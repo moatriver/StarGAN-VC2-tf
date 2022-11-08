@@ -30,7 +30,8 @@ class StarGAN_VC2():
             root_dir = "gs://stargan-vc2-data"
         
         else:
-            self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
+            # self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
+            self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0", "/gpu:1"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
             root_dir = os.path.dirname(__file__)
         
         self.checkpoint_dir = os.path.join(root_dir, "training_checkpoints", self.args.model_name, "ckpt")
@@ -38,8 +39,10 @@ class StarGAN_VC2():
         self.savedmodel_dir = os.path.join(root_dir, "saved_models", self.args.model_name, self.args.datetime)
 
         if args.mixed_precision and not args.use_tpu:
-            self.train_step_func = tf.function(self.train_step_mp, jit_compile=True)
-            self.test_step_func = tf.function(self.test_step, jit_compile=True)
+            # self.train_step_func = tf.function(self.train_step_mp, jit_compile=True)
+            self.train_step_func = tf.function(self.train_step_mp)
+            # self.test_step_func = tf.function(self.test_step, jit_compile=True)
+            self.test_step_func = tf.function(self.test_step)
         else:
             self.train_step_func = tf.function(self.train_step)
             self.test_step_func = tf.function(self.test_step)
@@ -83,8 +86,8 @@ class StarGAN_VC2():
         self.train_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_train_set(args.batch_size).with_options(options))
         self.test_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_test_set(args.batch_size).with_options(options))
 
-        # self.per_replica_batch_size = args.batch_size // self.distribute_strategy.num_replicas_in_sync
-        # self.crop_shape = (self.per_replica_batch_size, args.mcep_size, args.crop_size, 1)
+        self.per_replica_batch_size = args.batch_size // self.distribute_strategy.num_replicas_in_sync
+        self.crop_shape = (self.per_replica_batch_size, args.mcep_size, args.crop_size, 1)
 
     def discriminator_loss(self, y_real, y_fake):
         # 1 -> real
@@ -155,10 +158,10 @@ class StarGAN_VC2():
             self.train_loss_d_real.update_state(loss_real * self.distribute_strategy.num_replicas_in_sync)
             self.train_loss_d_fake.update_state(loss_fake * self.distribute_strategy.num_replicas_in_sync)
         
-
-        def step_fn(inputs):
+        @tf.function(jit_compile = True)
+        def d_compiled_step(inputs):
             origin_melspecs, origin_codes, target_codes = inputs
-
+            
             with tf.GradientTape() as d_tape:
                 generate_melspecs = self.generator((origin_melspecs, target_codes), training=False)
 
@@ -179,9 +182,11 @@ class StarGAN_VC2():
 
             d_scaled_gradients = d_tape.gradient(d_scaled_loss, self.discriminator.trainable_variables)
             d_gradients = self.d_optimizer.get_unscaled_gradients(d_scaled_gradients)
-            self.d_optimizer.apply_gradients(zip(d_gradients, self.discriminator.trainable_variables))
+            return d_gradients, d_loss, loss_real, loss_fake
 
-
+        @tf.function(jit_compile = True)
+        def g_compiled_step(inputs):
+            origin_melspecs, origin_codes, target_codes = inputs
             with tf.GradientTape() as g_tape:
                 generate_melspecs = self.generator((origin_melspecs, target_codes), training=True)
                 cycle_melspecs = self.generator((generate_melspecs, origin_codes), training=True)
@@ -199,27 +204,14 @@ class StarGAN_VC2():
 
             g_scaled_gradients = g_tape.gradient(g_scaled_loss, self.generator.trainable_variables)
             g_gradients = self.g_optimizer.get_unscaled_gradients(g_scaled_gradients)
+            return g_gradients, g_loss, total_loss_cyc, total_loss_id
+            
+        def step_fn(inputs):
+            d_gradients, d_loss, loss_real, loss_fake = d_compiled_step(inputs)
+            self.d_optimizer.apply_gradients(zip(d_gradients, self.discriminator.trainable_variables))
+
+            g_gradients, g_loss, total_loss_cyc, total_loss_id = g_compiled_step(inputs)
             self.g_optimizer.apply_gradients(zip(g_gradients, self.generator.trainable_variables))
-
-
-            # with tf.GradientTape() as g_tape:
-            #     generate_melspecs = self.generator((origin_melspecs, target_codes), training=True)
-            #     cycle_melspecs = self.generator((generate_melspecs, origin_codes), training=True)
-            #     identity_melspecs = self.generator((origin_melspecs, origin_codes), training=True)
-            # 
-            #     # generate_melspecs_crop = tf.image.random_crop(generate_melspecs, self.crop_shape)
-            #     env_code = tf.concat((origin_codes, target_codes), 1)
-            #     # y_fake = self.discriminator((generate_melspecs_crop, env_code), training=False)
-            #     y_fake = self.discriminator((generate_melspecs, env_code), training=False)
-            # 
-            #     total_adv_loss, total_loss_cyc, total_loss_id = self.generator_loss(y_fake, origin_melspecs, cycle_melspecs, identity_melspecs)
-            #     g_loss = total_adv_loss + total_loss_cyc + total_loss_id
-            # 
-            #     g_scaled_loss = self.g_optimizer.get_scaled_loss(g_loss)
-            # 
-            # g_scaled_gradients = g_tape.gradient(g_scaled_loss, self.generator.trainable_variables)
-            # g_gradients = self.g_optimizer.get_unscaled_gradients(g_scaled_gradients)
-            # self.g_optimizer.apply_gradients(zip(g_gradients, self.generator.trainable_variables))
             
 
             self.train_loss_g.update_state(g_loss * self.distribute_strategy.num_replicas_in_sync)
@@ -272,8 +264,9 @@ class StarGAN_VC2():
 
         
     def test_step(self, dataset_inputs):
-
-        def step_fn(inputs):
+        
+        @tf.function(jit_compile = True)
+        def compiled_step(inputs):
             origin_melspecs, origin_codes, target_codes = inputs
             # generate
             generate_melspecs = self.generator((origin_melspecs, target_codes), training=False)
@@ -295,6 +288,10 @@ class StarGAN_VC2():
             loss_real, loss_fake = self.discriminator_loss(y_real, y_fake)
             g_loss = total_adv_loss + total_loss_cyc + total_loss_id
             d_loss = loss_real + loss_fake
+            return y_real, y_fake, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs, d_loss, g_loss
+        
+        def step_fn(inputs):
+            y_real, y_fake, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs, d_loss, g_loss = compiled_step(inputs)
 
             self.test_loss_d.update_state(d_loss * self.distribute_strategy.num_replicas_in_sync)
             self.test_loss_g.update_state(g_loss * self.distribute_strategy.num_replicas_in_sync)
