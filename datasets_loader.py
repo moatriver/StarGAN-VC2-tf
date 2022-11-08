@@ -130,7 +130,11 @@ class DatasetLoader():
                 distribution = dict()
 
             for jvs_id in tqdm.tqdm(using_jvs_id):
-                data_path_list = glob.glob(os.path.join(".", "datasets", "jvs_datasets", jvs_id, "parallel100", "*", "*.wav"))
+                data_path_list = np.array(glob.glob(os.path.join(".", "datasets", "jvs_datasets", jvs_id, "parallel100", "*", "*.wav")))
+
+                p = np.random.permutation(len(data_path_list))
+                data_path_list = data_path_list[p]
+                data_path_list = data_path_list[:int(len(data_path_list) * ARGS.preset_datafile_ratio)]
 
                 mceps_list = []
                 for data_path in tqdm.tqdm(data_path_list, leave=False):
@@ -374,7 +378,7 @@ class DatasetLoader():
         
 if __name__ == "__main__":
     data = DatasetLoader()
-    data.make_datasets_from_vcc2018()
+    # data.make_datasets_from_vcc2018()
     # train_data = data.get_train_set(4)
     # 
     # print(train_data)

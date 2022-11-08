@@ -18,8 +18,9 @@ class Args:
         self.using_jvs_id_m = ["jvs009", "jvs020"]
         # self.using_jvs_id_f = ["jvs002", "jvs010", "jvs058", "jvs036"]
         self.using_jvs_id_f = ["jvs002", "jvs010"]
-        self.train_data_ratio = 0.85
-        self.remake_datasets = False
+        self.train_data_ratio = 0.70
+        self.preset_datafile_ratio = 0.5
+        self.remake_datasets = True
         self.shuffle_buffer_Size = 100
 
         self.iterations = 3*(10**5)
