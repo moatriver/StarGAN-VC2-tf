@@ -23,8 +23,8 @@ class Args:
         self.shuffle_buffer_Size = 100
 
         self.iterations = 3*(10**5)
-        self.batch_size = 64
-        self.sample_interval = 50
+        self.batch_size = 256
+        self.sample_interval = 500
         self.print_log = False
 
         self.g_learn_rate = 0.0002
@@ -43,8 +43,8 @@ class Args:
 
         self.restore_bool = False
         if self.restore_bool:
-            self.start_iteration = 404
-            self.datetime = "20220910-181737"
+            self.start_iteration = 1500
+            self.datetime = "20221016-174819"
         else:
             self.start_iteration = 0
             now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
