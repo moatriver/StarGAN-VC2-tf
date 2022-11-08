@@ -8,8 +8,8 @@ from setup_args import Args
 ARGS = Args()
 
 def get_conversion_data(file_path):
-    x, sr = sf.read(file_path)
-
+    x, sr = sf.read(file_path, always_2d=True)
+    x = x[:, 0]
     target_sr = ARGS.target_sr
     x = librosa.resample(x, orig_sr=sr, target_sr=target_sr)
     sr = target_sr
