@@ -23,9 +23,13 @@ class Args:
         self.remake_datasets = True
         self.shuffle_buffer_Size = 100
 
-        self.iterations = 3*(10**5)
-        self.batch_size = 256
-        self.sample_interval = 500
+        self.repeat_num = 1
+        self.iterations = 3*(10**5) // self.repeat_num
+        self.train_batch_size = 128
+        self.test_batch_size = 512
+        self.logging_interval = 1000 // self.repeat_num
+        self.sample_interval = 5000 // self.repeat_num
+        self.checkpoint_interval = 1000 // self.repeat_num
         self.print_log = False
 
         self.g_learn_rate = 0.0002
@@ -35,7 +39,7 @@ class Args:
         self.lambda_cyc = 10.0
         self.lambda_id = 5.0
         self.lambda_cls = 1.0
-        self.id_rate = 10**4
+        self.id_rate = 10**4 // self.repeat_num
 
         self.model_name = "stargan_vc2"
 
@@ -44,8 +48,12 @@ class Args:
 
         self.restore_bool = False
         if self.restore_bool:
-            self.start_iteration = 1500
-            self.datetime = "20221016-174819"
+            self.start_iteration = 13000
+            self.datetime = "20221121-093359"
+            
+            if self.id_rate <= self.start_iteration:
+                self.lambda_id = 0.0
+                print("change lambda id")
         else:
             self.start_iteration = 0
             now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)

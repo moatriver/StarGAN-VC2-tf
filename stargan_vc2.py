@@ -30,8 +30,8 @@ class StarGAN_VC2():
             root_dir = "gs://stargan-vc2-data"
         
         else:
-            # self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
-            self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0", "/gpu:1"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
+            self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0"]) # only 1 gpu using. if you using 2 gpu : devices=["/gpu:0", "/gpu:1"]
+            # self.distribute_strategy = tf.distribute.MirroredStrategy(devices=["/gpu:0", "/gpu:1"]) # using 2 gpu
             root_dir = os.path.dirname(__file__)
         
         self.checkpoint_dir = os.path.join(root_dir, "training_checkpoints", self.args.model_name, "ckpt")
@@ -39,10 +39,10 @@ class StarGAN_VC2():
         self.savedmodel_dir = os.path.join(root_dir, "saved_models", self.args.model_name, self.args.datetime)
 
         if args.mixed_precision and not args.use_tpu:
-            # self.train_step_func = tf.function(self.train_step_mp, jit_compile=True)
-            self.train_step_func = tf.function(self.train_step_mp)
-            # self.test_step_func = tf.function(self.test_step, jit_compile=True)
-            self.test_step_func = tf.function(self.test_step)
+            self.train_step_func = tf.function(self.train_step_mp, jit_compile=True)
+            # self.train_step_func = tf.function(self.train_step_mp)
+            self.test_step_func = tf.function(self.test_step, jit_compile=True)
+            # self.test_step_func = tf.function(self.test_step)
         else:
             self.train_step_func = tf.function(self.train_step)
             self.test_step_func = tf.function(self.test_step)
@@ -74,22 +74,22 @@ class StarGAN_VC2():
 
             self.checkpoint = tf.train.Checkpoint(g_optimizer=self.g_optimizer, generator=self.generator, d_optimizer=self.d_optimizer, discriminator=self.discriminator)
             self.checkpoint_manager = tf.train.CheckpointManager(self.checkpoint, self.checkpoint_dir, max_to_keep=3)
-
-        if self.args.restore_bool:
-            self.checkpoint.restore(self.checkpoint_manager.latest_checkpoint)
-            print("restored model...")
-
+            
+            if self.args.restore_bool:
+                self.checkpoint.restore(self.checkpoint_manager.latest_checkpoint)
+                print("restored model...")
+            
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.AUTO
 
         self.datasets = DatasetLoader()
-        self.train_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_train_set(args.batch_size).with_options(options))
-        self.test_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_test_set(args.batch_size).with_options(options))
+        self.train_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_train_set(args.train_batch_size, args.repeat_num).with_options(options))
+        self.test_dataset = self.distribute_strategy.experimental_distribute_dataset(self.datasets.get_test_set(args.test_batch_size).with_options(options))
 
-        self.per_replica_batch_size = args.batch_size // self.distribute_strategy.num_replicas_in_sync
+        self.per_replica_batch_size = args.train_batch_size // self.distribute_strategy.num_replicas_in_sync
         self.crop_shape = (self.per_replica_batch_size, args.mcep_size, args.crop_size, 1)
 
-    def discriminator_loss(self, y_real, y_fake):
+    def discriminator_loss(self, y_real, y_fake, batch_size):
         # 1 -> real
         # loss_real = self.bc(tf.ones_like(y_real), y_real)
         # loss_fake = self.bc(tf.zeros_like(y_fake), y_fake)
@@ -99,19 +99,19 @@ class StarGAN_VC2():
         loss_real = tf.reduce_mean((1.0 - y_real) ** 2, axis=1)
         loss_fake = tf.reduce_mean((y_fake) ** 2, axis=1)
 
-        per_example_loss_real = tf.nn.compute_average_loss(loss_real, global_batch_size=self.args.batch_size)
-        per_example_loss_fake = tf.nn.compute_average_loss(loss_fake, global_batch_size=self.args.batch_size)
+        per_example_loss_real = tf.nn.compute_average_loss(loss_real, global_batch_size=batch_size)
+        per_example_loss_fake = tf.nn.compute_average_loss(loss_fake, global_batch_size=batch_size)
         return per_example_loss_real, per_example_loss_fake
 
-    def generator_loss(self, y_fake, origin_melspecs, cycle_melspecs, identity_melspecs):
+    def generator_loss(self, y_fake, origin_melspecs, cycle_melspecs, identity_melspecs, batch_size):
         # loss_adv = self.bc(tf.ones_like(y_fake), y_fake)
         loss_adv = tf.reduce_mean((1.0 - y_fake) ** 2, axis=1)
         per_loss_cyc = self.mse(origin_melspecs, cycle_melspecs)
         per_loss_id = self.mse(origin_melspecs, identity_melspecs)
 
-        per_example_loss_adv = tf.nn.compute_average_loss(loss_adv, global_batch_size=self.args.batch_size)
-        total_loss_cyc = tf.nn.compute_average_loss(per_loss_cyc, global_batch_size=self.args.batch_size * self.args.dataset_t_length * self.args.mcep_size)
-        total_loss_id = tf.nn.compute_average_loss(per_loss_id, global_batch_size=self.args.batch_size * self.args.dataset_t_length * self.args.mcep_size)
+        per_example_loss_adv = tf.nn.compute_average_loss(loss_adv, global_batch_size=batch_size)
+        total_loss_cyc = tf.nn.compute_average_loss(per_loss_cyc, global_batch_size=batch_size * self.args.dataset_t_length * self.args.mcep_size)
+        total_loss_id = tf.nn.compute_average_loss(per_loss_id, global_batch_size=batch_size * self.args.dataset_t_length * self.args.mcep_size)
         return per_example_loss_adv, self.args.lambda_cyc * total_loss_cyc, self.args.lambda_id * total_loss_id
 
 
@@ -158,7 +158,7 @@ class StarGAN_VC2():
             self.train_loss_d_real.update_state(loss_real * self.distribute_strategy.num_replicas_in_sync)
             self.train_loss_d_fake.update_state(loss_fake * self.distribute_strategy.num_replicas_in_sync)
         
-        @tf.function(jit_compile = True)
+        # @tf.function(jit_compile = True)
         def d_compiled_step(inputs):
             origin_melspecs, origin_codes, target_codes = inputs
             
@@ -175,7 +175,7 @@ class StarGAN_VC2():
                 # y_fake = self.discriminator((generate_melspecs_crop, env_code), training=True)
                 y_fake = self.discriminator((generate_melspecs, env_code), training=True)
 
-                loss_real, loss_fake = self.discriminator_loss(y_real, y_fake)
+                loss_real, loss_fake = self.discriminator_loss(y_real, y_fake, self.args.train_batch_size)
                 d_loss = loss_real + loss_fake
 
                 d_scaled_loss = self.d_optimizer.get_scaled_loss(d_loss)
@@ -184,7 +184,7 @@ class StarGAN_VC2():
             d_gradients = self.d_optimizer.get_unscaled_gradients(d_scaled_gradients)
             return d_gradients, d_loss, loss_real, loss_fake
 
-        @tf.function(jit_compile = True)
+        # @tf.function(jit_compile = True)
         def g_compiled_step(inputs):
             origin_melspecs, origin_codes, target_codes = inputs
             with tf.GradientTape() as g_tape:
@@ -197,7 +197,7 @@ class StarGAN_VC2():
                 # y_fake = self.discriminator((generate_melspecs_crop, env_code), training=False)
                 y_fake = self.discriminator((generate_melspecs, env_code), training=False)
 
-                total_adv_loss, total_loss_cyc, total_loss_id = self.generator_loss(y_fake, origin_melspecs, cycle_melspecs, identity_melspecs)
+                total_adv_loss, total_loss_cyc, total_loss_id = self.generator_loss(y_fake, origin_melspecs, cycle_melspecs, identity_melspecs, self.args.train_batch_size)
                 g_loss = total_adv_loss + total_loss_cyc + total_loss_id
 
                 g_scaled_loss = self.g_optimizer.get_scaled_loss(g_loss)
@@ -265,7 +265,7 @@ class StarGAN_VC2():
         
     def test_step(self, dataset_inputs):
         
-        @tf.function(jit_compile = True)
+        # @tf.function(jit_compile = True)
         def compiled_step(inputs):
             origin_melspecs, origin_codes, target_codes = inputs
             # generate
@@ -284,8 +284,8 @@ class StarGAN_VC2():
             # y_fake = self.discriminator((generate_melspecs_crop, env_code), training=False)
             y_fake = self.discriminator((generate_melspecs, env_code), training=False)
 
-            total_adv_loss, total_loss_cyc, total_loss_id = self.generator_loss(y_fake, origin_melspecs, cycle_melspecs, identity_melspecs)
-            loss_real, loss_fake = self.discriminator_loss(y_real, y_fake)
+            total_adv_loss, total_loss_cyc, total_loss_id = self.generator_loss(y_fake, origin_melspecs, cycle_melspecs, identity_melspecs, self.args.test_batch_size)
+            loss_real, loss_fake = self.discriminator_loss(y_real, y_fake, self.args.test_batch_size)
             g_loss = total_adv_loss + total_loss_cyc + total_loss_id
             d_loss = loss_real + loss_fake
             return y_real, y_fake, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs, d_loss, g_loss
@@ -317,9 +317,7 @@ class StarGAN_VC2():
 
         with open(os.path.join(".", "datasets", "dataset_size.pkl"), 'rb') as p:
             train_size, test_size = pickle.load(p)  
-        train_size, test_size = train_size//self.args.batch_size, test_size//self.args.batch_size
-
-
+        train_size, test_size = int(train_size/self.args.train_batch_size * self.args.repeat_num), test_size//self.args.test_batch_size
 
         for iteration in tqdm(range(self.args.start_iteration, self.args.iterations), initial=self.args.start_iteration, total=self.args.iterations):
 
@@ -345,14 +343,8 @@ class StarGAN_VC2():
                         self.test_step_func = tf.function(self.test_step)
                 self.train_step_func(train_data)
 
-            for i, test_data in enumerate(tqdm(self.test_dataset, leave=False, total=test_size)):     
-                y_real, y_fake, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs = self.test_step_func(test_data)
-
-
             train_loss_g = self.train_loss_g.result()
             train_loss_d = self.train_loss_d.result()
-            test_loss_g = self.test_loss_g.result()
-            test_loss_d = self.test_loss_d.result()
             train_loss_g_cyc = self.train_loss_g_cyc.result()
             train_loss_g_id = self.train_loss_g_id.result()
             train_loss_d_real = self.train_loss_d_real.result()
@@ -360,13 +352,11 @@ class StarGAN_VC2():
 
             self.train_loss_g.reset_state()
             self.train_loss_d.reset_state()
-            self.test_loss_g.reset_state()
-            self.test_loss_d.reset_state()
             self.train_loss_g_cyc.reset_state()
             self.train_loss_g_id.reset_state()
             self.train_loss_d_real.reset_state()
             self.train_loss_d_fake.reset_state()
-
+          
             if (iteration + 1) % self.args.sample_interval == 0 or (iteration + 1) == self.args.iterations:
                 # 訓練の進捗を出力する
                 print(f"train_loss: g:{train_loss_g}, d:{train_loss_d}, test_loss: g:{test_loss_g}, d:{test_loss_d}")
@@ -375,43 +365,56 @@ class StarGAN_VC2():
                 save_dir = os.path.join(self.savedmodel_dir, f"{(iteration + 1):05d}")
                 os.makedirs(save_dir, exist_ok=True)
                 self.generator.save(save_dir, include_optimizer = False)
-                    
 
-            # TensorBoardにloss類と元/生成melspecを保存
-            with self.summary_writer.as_default():
-                tf.summary.scalar("train/training_loss_g", train_loss_g, iteration + 1)
-                tf.summary.scalar("train/training_loss_d", train_loss_d, iteration + 1)
+            if (iteration + 1) % self.args.logging_interval == 0 or (iteration + 1) == self.args.iterations:
 
-                tf.summary.scalar("train_summary/cycle_loss", train_loss_g_cyc, iteration + 1)
-                tf.summary.scalar("train_summary/identity_loss",train_loss_g_id, iteration + 1)
-                tf.summary.scalar("train_summary/discriminator_real", train_loss_d_real, iteration + 1)
-                tf.summary.scalar("train_summary/discriminator_fake", train_loss_d_fake, iteration + 1)
+                for i, test_data in enumerate(tqdm(self.test_dataset, leave=False, total=test_size)):     
+                    y_real, y_fake, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs = self.test_step_func(test_data)
 
-                tf.summary.scalar("test/test_loss_g", test_loss_g, iteration + 1)
-                tf.summary.scalar("test/test_loss_d", test_loss_d, iteration + 1)
-                
+                test_loss_g = self.test_loss_g.result()
+                test_loss_d = self.test_loss_d.result()
+
+                self.test_loss_g.reset_state()
+                self.test_loss_d.reset_state()
+
+                train_metrics = train_loss_g, train_loss_d, train_loss_g_cyc, train_loss_g_id, train_loss_d_real, train_loss_d_fake
+
                 if self.distribute_strategy.num_replicas_in_sync == 1:
-                    if iteration == 0:
-                        tf.summary.image("origin_melspecs", origin_melspecs[:2], iteration + 1)
-                    tf.summary.image("generate_melspecs", generate_melspecs[:2], iteration + 1)
-                    tf.summary.image("cycle_melspecs", cycle_melspecs[:2], iteration + 1)
-                    tf.summary.image("identity_melspecs", identity_melspecs[:2], iteration + 1)
-                    tf.summary.text("test_summary/y_real", tf.strings.as_string(y_real), iteration + 1)
-                    tf.summary.text("test_summary/y_fake", tf.strings.as_string(y_fake), iteration + 1)
-                    tf.summary.text("test_summary/gen_melspec_min", tf.strings.as_string(tf.math.reduce_min(generate_melspecs[0])), iteration + 1)
-                    tf.summary.text("test_summary/gen_melspec_max", tf.strings.as_string(tf.math.reduce_max(generate_melspecs[0])), iteration + 1)
+                    test_metrics = test_loss_g, test_loss_d, origin_melspecs[:2], generate_melspecs[:2], cycle_melspecs[:2], identity_melspecs[:2], y_real, y_fake
                 else:
-                    if iteration == 0:
-                        tf.summary.image("origin_melspecs", origin_melspecs.values[0][:2], iteration + 1)
-                    tf.summary.image("generate_melspecs", generate_melspecs.values[0][:2], iteration + 1)
-                    tf.summary.image("cycle_melspecs", cycle_melspecs.values[0][:2], iteration + 1)
-                    tf.summary.image("identity_melspecs", identity_melspecs.values[0][:2], iteration + 1)
-                    tf.summary.text("test_summary/y_real", tf.strings.as_string(y_real.values[0]), iteration + 1)
-                    tf.summary.text("test_summary/y_fake", tf.strings.as_string(y_fake.values[0]), iteration + 1)
-                    tf.summary.text("test_summary/gen_melspec_min", tf.strings.as_string(tf.math.reduce_min(generate_melspecs.values[0][0])), iteration + 1)
-                    tf.summary.text("test_summary/gen_melspec_max", tf.strings.as_string(tf.math.reduce_max(generate_melspecs.values[0][0])), iteration + 1)
+                    test_metrics = test_loss_g, test_loss_d, origin_melspecs.values[0][:2], generate_melspecs.values[0][:2], cycle_melspecs.values[0][:2], identity_melspecs.values[0][:2], y_real.values[0], y_fake.values[0]
 
-            # 異常終了対策
-            self.checkpoint_manager.save()
+                self.summary_write(iteration + 1, train_metrics, test_metrics) 
+            
+            if (iteration + 1) % self.args.checkpoint_interval == 0 or (iteration + 1) == self.args.iterations:
+                # 異常終了対策
+                self.checkpoint_manager.save()
+            
+    def summary_write(self, iteration, train_metrics, test_metrics):
+        train_loss_g, train_loss_d, train_loss_g_cyc, train_loss_g_id, train_loss_d_real, train_loss_d_fake = train_metrics
+        test_loss_g, test_loss_d, origin_melspecs, generate_melspecs, cycle_melspecs, identity_melspecs, y_real, y_fake = test_metrics
+        # TensorBoardにloss類と元/生成melspecを保存
+        with self.summary_writer.as_default():
+            tf.summary.scalar("train/training_loss_g", train_loss_g, iteration)
+            tf.summary.scalar("train/training_loss_d", train_loss_d, iteration)
+
+            tf.summary.scalar("train_summary/cycle_loss", train_loss_g_cyc, iteration)
+            tf.summary.scalar("train_summary/identity_loss",train_loss_g_id, iteration)
+            tf.summary.scalar("train_summary/discriminator_real", train_loss_d_real, iteration)
+            tf.summary.scalar("train_summary/discriminator_fake", train_loss_d_fake, iteration)
+
+            tf.summary.scalar("test/test_loss_g", test_loss_g, iteration)
+            tf.summary.scalar("test/test_loss_d", test_loss_d, iteration)
+                
+
+            if iteration == 1:
+                tf.summary.image("origin_melspecs", origin_melspecs, iteration)
+            tf.summary.image("generate_melspecs", generate_melspecs, iteration)
+            tf.summary.image("cycle_melspecs", cycle_melspecs, iteration)
+            tf.summary.image("identity_melspecs", identity_melspecs, iteration)
+            tf.summary.text("test_summary/y_real", tf.strings.as_string(y_real), iteration)
+            tf.summary.text("test_summary/y_fake", tf.strings.as_string(y_fake), iteration)
+            tf.summary.text("test_summary/gen_melspec_min", tf.strings.as_string(tf.math.reduce_min(generate_melspecs[0])), iteration)
+            tf.summary.text("test_summary/gen_melspec_max", tf.strings.as_string(tf.math.reduce_max(generate_melspecs[0])), iteration)
 
 

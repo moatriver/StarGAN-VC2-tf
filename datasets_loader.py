@@ -79,23 +79,26 @@ class DatasetLoader():
         return list(parsed_elem.values())
 
 
-    def load_dataset(self, shard_files, use_shuffle):
+    def load_dataset(self, shard_files, batch_size, use_shuffle):
         shards = tf.data.Dataset.from_tensor_slices(shard_files)
         if use_shuffle:
             shards = shards.shuffle(ARGS.shuffle_buffer_Size)
-        dataset = shards.interleave(tf.data.TFRecordDataset, num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = shards.interleave(tf.data.TFRecordDataset, num_parallel_calls=tf.data.AUTOTUNE).cache()
+        dataset = dataset.map(map_func=self.parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         # dataset = dataset.map(lambda mceps, source, target: (mceps, tf.cast(source, tf.int64), tf.cast(target, tf.int64)) , num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        return dataset.map(map_func=self.parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        if use_shuffle:
+            dataset = dataset.shuffle(ARGS.shuffle_buffer_Size)
+        return dataset.batch(batch_size, drop_remainder=True)
 
 
-    def get_train_set(self, batch_size):
-        dataset = self.load_dataset(self.train_shard_files, use_shuffle=True)
-        self.train_dataset = dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    def get_train_set(self, batch_size, repeat_num = 1):
+        dataset = self.load_dataset(self.train_shard_files, batch_size, use_shuffle=True)
+        self.train_dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return self.train_dataset
 
     def get_test_set(self, batch_size):
-        dataset = self.load_dataset(self.test_shard_files, use_shuffle=False)
-        self.test_dataset = dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+        dataset = self.load_dataset(self.test_shard_files, batch_size, use_shuffle=False)
+        self.test_dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return self.test_dataset
 
     def make_datasets(self):
