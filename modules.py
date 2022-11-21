@@ -83,7 +83,61 @@ class ConditionalInstanceNormalization(tfa.layers.GroupNormalization):
 
         return normalized_inputs
 
+class AdaptiveInstanceNormalization(tfa.layers.GroupNormalization):
+    # どう組み込む？
+    def __init__(self, **kwargs):
+        kwargs["groups"] = -1
+        super().__init__(**kwargs)
+    
+    def build(self, input_shape):
+        dtype = tf.as_dtype(self.dtype or tf.keras.backend.floatx())
+        if not (dtype.is_floating or dtype.is_complex):
+            raise TypeError('A Dense layer can only be built with a floating-point '
+                      f'dtype. Received: dtype={dtype}')
+        n_channels = input_shape[-1]
+        
+        self.broadcast_shape = [1] * len(input_shape)
+        self.broadcast_shape[0] = -1
+        self.broadcast_shape[-1] = n_channels
 
+        self._set_norm_axis(input_shape)
+
+        self._set_number_of_groups_for_instance_norm(input_shape)
+        self._create_input_spec(input_shape)
+        self.built = True
+        super(tfa.layers.GroupNormalization, self).build(input_shape)
+        
+    def _set_norm_axis(self, input_shape):
+        dim = len(input_shape)
+        if dim == 4:
+            # NHWC
+            self.instance_norm_axes = [1, 2]
+        elif dim == 3:
+            # NHC
+            self.instance_norm_axes = [1]
+        else:
+            raise ValueError(
+                "Input shape: " + str(input_shape) + " is not supported."
+                "Enter a 2D input (NHC) or 3D input (NHWC) Tensor."
+            )
+
+    def call(self, inputs, condition):
+        x_mean, x_var = tf.nn.moments(inputs, axes=self.instance_norm_axes, keep_dims=True)
+        y_mean, y_var = tf.nn.moments(condition, axes=self.instance_norm_axes, keep_dims=True)
+        y_std = tf.sqrt(y_var + self.epsilon)
+        
+        normalized_inputs = tf.nn.batch_normalization(
+            inputs,
+            mean=x_mean,
+            variance=x_var,
+            scale=y_std,
+            offset=y_mean,
+            variance_epsilon=self.epsilon,
+        )
+
+        return normalized_inputs
+
+    
 class PixelShuffler(tf.keras.layers.Layer):
     def __init__(self, r = 2, **kwargs):
         self.r = r
