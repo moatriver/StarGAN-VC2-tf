@@ -88,7 +88,7 @@ if __name__ == "__main__":
         [tf.config.experimental.set_memory_growth(gpu, True) for gpu in gpus]
 
     # set generator weights
-    load_generator = tf.keras.models.load_model("./saved_models/stargan_vc2/20221016-174819/01500", compile = False)
+    load_generator = tf.keras.models.load_model("./saved_models/stargan_vc2/20221121-093359/15000", compile = False)
     generator = models.Generator(ARGS.code_size)
     generator((tf.random.uniform((1, 35, 444, 1)), tf.random.uniform((1, 4)))) # build
     generator.set_weights(load_generator.get_weights()) 
@@ -112,3 +112,4 @@ if __name__ == "__main__":
     conversion_nonlearn(generator, "/workspace/StarGAN-VC2-tf/datasets/test_conersion.wav", "jvs020")
     conversion_nonlearn(generator, "/workspace/StarGAN-VC2-tf/datasets/test_conersion.wav", "jvs002")
     conversion_nonlearn(generator, "/workspace/StarGAN-VC2-tf/datasets/test_conersion.wav", "jvs010")
+    print("test conversion done!")
